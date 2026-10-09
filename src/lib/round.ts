@@ -47,6 +47,17 @@ export function latestCompletedRoundAnchor(now: Date = new Date()): Date {
   return anchor;
 }
 
+/** Seconds to wait after :54 before treating a round as fetchable on TronGrid. */
+export const SYNC_FINALITY_LAG_MS = 6000;
+
+/** Latest round anchor safe to sync (allows block propagation after :54). */
+export function syncableRoundAnchor(
+  now: Date = new Date(),
+  lagMs: number = SYNC_FINALITY_LAG_MS,
+): Date {
+  return latestCompletedRoundAnchor(new Date(now.getTime() - lagMs));
+}
+
 /** Previous round key relative to (utcDate, roundNumber). */
 export function previousRoundKey(
   utcDate: string,

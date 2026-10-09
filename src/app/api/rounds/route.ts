@@ -16,7 +16,12 @@ export async function GET(request: NextRequest) {
     const q = parseRoundsQuery(request.nextUrl.searchParams);
     const status = await getSyncStatus();
     if (status.isStale) {
-      await syncRounds({ maxRounds: STALE_SYNC_MAX });
+      try {
+        await syncRounds({ maxRounds: STALE_SYNC_MAX });
+      } catch (err) {
+        // A failed on-demand sync must not break reads.
+        console.error("on-demand sync failed", err);
+      }
     }
 
     const db = getDb();

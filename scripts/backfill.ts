@@ -1,7 +1,7 @@
 import { desc } from "drizzle-orm";
 import { getDb, closeDb } from "@/db/client";
 import { rounds } from "@/db/schema";
-import { enumerateRoundKeys, roundMetaFromUtcDate } from "@/lib/round";
+import { enumerateRoundKeys, latestCompletedRoundAnchor, roundMetaFromUtcDate } from "@/lib/round";
 import { fetchAndStoreRound } from "@/lib/sync";
 import { TronRpcClient } from "@/lib/tron-rpc";
 
@@ -25,11 +25,7 @@ async function main() {
   const rpc = new TronRpcClient({ minIntervalMs: 100 });
   const db = getDb();
 
-  const endAnchor = new Date();
-  endAnchor.setUTCSeconds(0, 0);
-  if (endAnchor.getUTCSeconds() < 54) {
-    endAnchor.setUTCMinutes(endAnchor.getUTCMinutes() - 1);
-  }
+  const endAnchor = latestCompletedRoundAnchor();
   const endMeta = roundMetaFromUtcDate(endAnchor);
 
   const startDate = new Date(endAnchor);
@@ -42,7 +38,7 @@ async function main() {
   let hint: number;
   const latest = await db.select().from(rounds).orderBy(desc(rounds.blockNumber)).limit(1);
   if (latest.length > 0) {
-    hint = latest[0]!.blockNumber - 20 * 60 * days;
+    hint = latest[0]!.blockNumber - 20 * 60 * 24 * days;
   } else {
     hint = (await rpc.getLatestBlockNumber()) - 20 * 60 * 24 * days;
   }

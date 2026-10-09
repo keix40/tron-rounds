@@ -42,6 +42,8 @@ Live archive and statistics for TRON mainnet **rounds** — the block whose time
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `DATABASE_URL` | Yes | Postgres connection string (Neon) |
+| `DATABASE_DRIVER` | No | Set to `neon` (or `serverless`) to use `@neondatabase/serverless` WebSocket driver (port 443) instead of `postgres` TCP |
+| `USE_NEON_SERVERLESS` | No | Set to `1` — same as `DATABASE_DRIVER=neon` |
 | `SYNC_SECRET` | Yes (prod) | Bearer token for `POST /api/sync` |
 | `TRONGRID_API_KEY` | No | Optional TronGrid Pro API key header |
 | `TRONGRID_RPC_URL` | No | Override JSON-RPC URL (default: public TronGrid) |

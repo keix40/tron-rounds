@@ -1,12 +1,13 @@
 import { and, desc, eq, sql } from "drizzle-orm";
 import { getDb } from "@/db/client";
+import { firstRow } from "@/db/rows";
 import { rounds, type NewRound } from "@/db/schema";
 import { deriveRoundOutcome } from "@/lib/digit";
 import {
   anchorDateForRound,
   enumerateRoundKeys,
-  latestCompletedRoundAnchor,
   nextRoundKey,
+  syncableRoundAnchor,
   previousRoundKey,
   roundMetaFromUtcDate,
   targetTimestampSecond54,
@@ -19,9 +20,11 @@ import {
 } from "@/lib/tron-rpc";
 
 const SYNC_LOCK_KEY = 894_032_117;
+const completedAnchorNow = () => syncableRoundAnchor();
 
 export type SyncOptions = {
   maxRounds?: number;
+  timeBudgetMs?: number;
   rpc?: TronRpcClient;
 };
 
@@ -54,38 +57,31 @@ function blockToRound(row: {
   };
 }
 
-async function tryAdvisoryLock(): Promise<boolean> {
-  const db = getDb();
-  const rows = await db.execute<{ locked: boolean }>(
-    sql`SELECT pg_try_advisory_lock(${SYNC_LOCK_KEY}) AS locked`,
-  );
-  const locked = rows[0]?.locked;
-  return Boolean(locked);
-}
-
-async function releaseAdvisoryLock(): Promise<void> {
-  const db = getDb();
-  await db.execute(sql`SELECT pg_advisory_unlock(${SYNC_LOCK_KEY})`);
-}
-
 export async function syncRounds(options: SyncOptions = {}): Promise<SyncResult> {
-  const maxRounds = options.maxRounds ?? 30;
+  const maxRounds = Math.max(1, Math.min(options.maxRounds ?? 30, 500));
+  // Bound work per request so serverless functions stay well under their time limit.
+  const deadline = Date.now() + (options.timeBudgetMs ?? 7000);
   const rpc = options.rpc ?? new TronRpcClient();
   const db = getDb();
 
-  const locked = await tryAdvisoryLock();
-  if (!locked) {
-    return { inserted: 0, skipped: 0, lastRoundId: null, stale: true };
-  }
+  // Transaction-scoped advisory lock: safe behind Neon's transaction-mode pooler and a
+  // multi-connection client (a session lock could be taken and released on different
+  // connections and leak forever). Auto-released on commit/rollback.
+  return db.transaction(async (tx) => {
+    const lockRows = await tx.execute<{ locked: boolean }>(
+      sql`SELECT pg_try_advisory_xact_lock(${SYNC_LOCK_KEY}) AS locked`,
+    );
+    if (!firstRow<{ locked: boolean }>(lockRows)?.locked) {
+      return { inserted: 0, skipped: 0, lastRoundId: null, stale: true };
+    }
 
-  try {
-    const latestRows = await db
+    const latestRows = await tx
       .select()
       .from(rounds)
       .orderBy(desc(rounds.blockTimeUtc))
       .limit(1);
 
-    const endAnchor = latestCompletedRoundAnchor();
+    const endAnchor = completedAnchorNow();
     const endMeta = roundMetaFromUtcDate(endAnchor);
 
     let startKey: { utcDate: string; roundNumber: number };
@@ -103,57 +99,59 @@ export async function syncRounds(options: SyncOptions = {}): Promise<SyncResult>
       startBlockHint = last.blockNumber + 20;
     }
 
-    const keys = enumerateRoundKeys(startKey, endMeta).slice(0, maxRounds);
-    if (keys.length === 0) {
-      return {
-        inserted: 0,
-        skipped: 0,
-        lastRoundId: latestRows[0]?.roundId ?? null,
-        stale: false,
-      };
+    const lastKnown = latestRows[0]
+      ? `${latestRows[0].utcDate}:${latestRows[0].roundNumber}`
+      : null;
+    const endKey = `${endMeta.utcDate}:${endMeta.roundNumber}`;
+    if (lastKnown === endKey) {
+      return { inserted: 0, skipped: 0, lastRoundId: latestRows[0]!.roundId, stale: false };
     }
 
+    const keys = enumerateRoundKeys(startKey, endMeta).slice(0, maxRounds);
     let inserted = 0;
     let skipped = 0;
     let hint = startBlockHint;
+    let lastDone: { utcDate: string; roundNumber: number } | null = null;
 
     for (const key of keys) {
+      if (Date.now() > deadline) break;
       const anchor = anchorDateForRound(key.utcDate, key.roundNumber);
       const targetTs = targetTimestampSecond54(anchor);
-      const { block, blockNumber } = await findBlockAtOrAfterSecond54(rpc, targetTs, hint);
+      let found: Awaited<ReturnType<typeof findBlockAtOrAfterSecond54>>;
+      try {
+        found = await findBlockAtOrAfterSecond54(rpc, targetTs, hint);
+      } catch {
+        // e.g. hint past chain head or TronGrid hiccup: stop here, the next sync resumes.
+        break;
+      }
+      const { block, blockNumber } = found;
       hint = blockNumber + 20;
       const ts = blockTimestampSeconds(block);
-      const blockTimeUtc = new Date(ts * 1000);
 
       const row = blockToRound({
         utcDate: key.utcDate,
         roundNumber: key.roundNumber,
         blockNumber,
         blockHash: block.hash,
-        blockTimeUtc,
+        blockTimeUtc: new Date(ts * 1000),
       });
 
-      try {
-        await db.insert(rounds).values(row).onConflictDoNothing();
-        inserted += 1;
-      } catch {
-        skipped += 1;
-      }
+      const res = await tx.insert(rounds).values(row).onConflictDoNothing().returning();
+      if (res.length > 0) inserted += 1;
+      else skipped += 1;
+      lastDone = key;
     }
 
-    const lastKey = keys[keys.length - 1]!;
     const stillBehind =
-      lastKey.utcDate !== endMeta.utcDate || lastKey.roundNumber !== endMeta.roundNumber;
+      !lastDone || lastDone.utcDate !== endMeta.utcDate || lastDone.roundNumber !== endMeta.roundNumber;
 
     return {
       inserted,
       skipped,
-      lastRoundId: formatRoundId(lastKey.roundNumber),
+      lastRoundId: lastDone ? formatRoundId(lastDone.roundNumber) : null,
       stale: stillBehind,
     };
-  } finally {
-    await releaseAdvisoryLock();
-  }
+  });
 }
 
 /** For backfill: fetch a single round with hint block. */
@@ -195,7 +193,7 @@ export async function getSyncStatus(): Promise<{
 }> {
   const db = getDb();
   const latestRows = await db.select().from(rounds).orderBy(desc(rounds.blockTimeUtc)).limit(1);
-  const endAnchor = latestCompletedRoundAnchor();
+  const endAnchor = completedAnchorNow();
   const latestCompleted = roundMetaFromUtcDate(endAnchor);
   const last = latestRows[0] ?? null;
   let isStale = true;
