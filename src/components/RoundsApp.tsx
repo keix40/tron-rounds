@@ -182,13 +182,13 @@ export default function RoundsApp() {
       const now = new Date();
       const sec = now.getUTCSeconds();
       const ms = now.getUTCMilliseconds();
-      // Fast poll while catching up or in the :54–:08 tip window.
-      if (isStale || sec >= 54 || sec <= 8) {
-        setRefreshHint("Catching up… (1.5s)");
-        return 1500;
+      // Fast poll from :52 through :08 so the tip sync is warm when grace opens.
+      if (isStale || sec >= 52 || sec <= 8) {
+        setRefreshHint("Catching up… (1s)");
+        return 1000;
       }
-      // Wake at :54 so we never sleep through the new round.
-      const msUntil54 = (54 - sec) * 1000 - ms;
+      // Wake at :52 so we never sleep through the new round.
+      const msUntil54 = (52 - sec) * 1000 - ms;
       setRefreshHint("Auto-refresh ~20s");
       return Math.min(20_000, Math.max(200, msUntil54));
     }
