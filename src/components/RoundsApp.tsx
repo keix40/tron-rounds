@@ -90,8 +90,11 @@ export default function RoundsApp() {
   const [meta, setMeta] = useState<{ lastUpdated: string | null; isStale: boolean; latestCompletedRoundId?: string } | null>(null);
   const [refreshHint, setRefreshHint] = useState("Auto-refresh ~20s");
   const metaRef = useRef(meta);
-  metaRef.current = meta;
   const [stats, setStats] = useState<Stats | null>(null);
+
+  useEffect(() => {
+    metaRef.current = meta;
+  }, [meta]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
