@@ -10,24 +10,24 @@ import { TronRpcClient } from "@/lib/tron-rpc";
 const hasDb = Boolean(process.env.DATABASE_URL);
 
 describe("syncableRoundAnchor (:54 grace)", () => {
-  it("keeps previous minute until ~2.5s after :54", () => {
+  it("keeps previous minute until ~0.5s after :54", () => {
     const at554 = new Date("2026-10-05T07:10:54.000Z");
     expect(syncableRoundAnchor(at554).toISOString()).toBe("2026-10-05T07:09:00.000Z");
 
-    const at556 = new Date("2026-10-05T07:10:56.499Z");
-    expect(syncableRoundAnchor(at556).toISOString()).toBe("2026-10-05T07:09:00.000Z");
+    const at5544 = new Date("2026-10-05T07:10:54.499Z");
+    expect(syncableRoundAnchor(at5544).toISOString()).toBe("2026-10-05T07:09:00.000Z");
   });
 
-  it("includes current minute once :54 is 2.5s in the past", () => {
-    const at5565 = new Date("2026-10-05T07:10:56.500Z");
-    expect(syncableRoundAnchor(at5565).toISOString()).toBe("2026-10-05T07:10:00.000Z");
+  it("includes current minute once :54 is 0.5s in the past", () => {
+    const at5545 = new Date("2026-10-05T07:10:54.500Z");
+    expect(syncableRoundAnchor(at5545).toISOString()).toBe("2026-10-05T07:10:00.000Z");
 
     const at600 = new Date("2026-10-05T07:11:00.000Z");
     expect(syncableRoundAnchor(at600).toISOString()).toBe("2026-10-05T07:10:00.000Z");
   });
 
-  it("uses SYNC_FINALITY_LAG_MS constant (~2.5s)", () => {
-    expect(SYNC_FINALITY_LAG_MS).toBe(2500);
+  it("uses SYNC_FINALITY_LAG_MS constant (~0.5s)", () => {
+    expect(SYNC_FINALITY_LAG_MS).toBe(500);
   });
 });
 

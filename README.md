@@ -29,7 +29,7 @@ Live archive and statistics for TRON mainnet **rounds** — the block whose time
 
 ### Freshness (no paid cron)
 
-`syncRounds()` is **idempotent**: it fills missing rounds from the latest **syncable** :54 anchor backward (newest first), so the live tip stays fresh even when older history is still backfilling. Sync waits **~2.5s** after `:54` for the block to exist on TronGrid. Older gaps are filled by backfill or later syncs.
+`syncRounds()` is **idempotent**: it fills missing rounds from the latest **syncable** :54 anchor backward (newest first), so the live tip stays fresh even when older history is still backfilling. Sync waits **~0.5s** after `:54` for the block to exist on TronGrid. Older gaps are filled by backfill or later syncs.
 
 The UI polls about every **1s** from **:54–:08** UTC (and while the tip is catching up), then every **~20s** the rest of the minute.
 
