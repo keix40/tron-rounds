@@ -29,7 +29,7 @@ Live archive and statistics for TRON mainnet **rounds** — the block whose time
 
 ### Freshness (no paid cron)
 
-`syncRounds()` is **idempotent**: it fills missing rounds from the last stored row through the latest **completed** minute.
+`syncRounds()` is **idempotent**: it fills missing rounds from the latest **syncable** :54 anchor backward (newest first), so the live tip stays fresh even when older history is still backfilling. Older gaps are filled by backfill or later syncs.
 
 | Trigger | Behavior |
 |---------|----------|
