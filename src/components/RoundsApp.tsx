@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type RoundRow = {
   roundId: string;
@@ -87,8 +87,14 @@ export default function RoundsApp() {
 
   const [rows, setRows] = useState<RoundRow[]>([]);
   const [totalPages, setTotalPages] = useState(1);
-  const [meta, setMeta] = useState<{ lastUpdated: string | null; isStale: boolean } | null>(null);
+  const [meta, setMeta] = useState<{ lastUpdated: string | null; isStale: boolean; latestCompletedRoundId?: string } | null>(null);
+  const [refreshHint, setRefreshHint] = useState("Auto-refresh ~20s");
+  const metaRef = useRef(meta);
   const [stats, setStats] = useState<Stats | null>(null);
+
+  useEffect(() => {
+    metaRef.current = meta;
+  }, [meta]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -109,8 +115,9 @@ export default function RoundsApp() {
     [page, pageSize, sort, order, side, parity, digit, dateFrom, dateTo, tz],
   );
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (opts?: { quiet?: boolean }) => {
+    const quiet = opts?.quiet ?? false;
+    if (!quiet) setLoading(true);
     setError(null);
     try {
       const [roundsRes, statsRes] = await Promise.all([
@@ -125,10 +132,12 @@ export default function RoundsApp() {
       setTotalPages(roundsJson.pagination.totalPages || 1);
       setMeta(roundsJson.meta);
       setStats(statsJson);
+      return roundsJson.meta as { lastUpdated: string | null; isStale: boolean; latestCompletedRoundId?: string };
     } catch (e) {
       setError(e instanceof Error ? e.message : "Load failed");
+      return null;
     } finally {
-      setLoading(false);
+      if (!quiet) setLoading(false);
     }
   }, [filterQuery, side, parity, digit, dateFrom, dateTo, tz]);
 
@@ -165,8 +174,48 @@ export default function RoundsApp() {
   }, [filterQuery, side, parity, digit, dateFrom, dateTo, tz]);
 
   useEffect(() => {
-    const id = setInterval(() => void load(), 60_000);
-    return () => clearInterval(id);
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let inFlight = false;
+
+    function delayMs(isStale: boolean): number {
+      const now = new Date();
+      const sec = now.getUTCSeconds();
+      const ms = now.getUTCMilliseconds();
+      // Fast poll while catching up or in the :54–:08 tip window.
+      if (isStale || sec >= 54 || sec <= 8) {
+        setRefreshHint("Catching up… (1.5s)");
+        return 1500;
+      }
+      // Wake at :54 so we never sleep through the new round.
+      const msUntil54 = (54 - sec) * 1000 - ms;
+      setRefreshHint("Auto-refresh ~20s");
+      return Math.min(20_000, Math.max(200, msUntil54));
+    }
+
+    async function tick() {
+      if (cancelled) return;
+      const staleNow = Boolean(metaRef.current?.isStale);
+      const wait = delayMs(staleNow);
+      timer = setTimeout(async () => {
+        if (cancelled) return;
+        if (!inFlight) {
+          inFlight = true;
+          try {
+            await load({ quiet: true });
+          } finally {
+            inFlight = false;
+          }
+        }
+        void tick();
+      }, wait);
+    }
+
+    void tick();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
   }, [load]);
 
   function toggleSort(col: SortCol) {
@@ -192,8 +241,11 @@ export default function RoundsApp() {
         <p className="mt-2 text-xs text-muted">
           Last updated:{" "}
           {meta?.lastUpdated ? new Date(meta.lastUpdated).toLocaleString() : "—"}
-          {meta?.isStale ? " (syncing…)" : ""}
-          · Auto-refresh 60s
+          {meta?.isStale
+            ? ` · Catching up${meta.latestCompletedRoundId ? ` to ${meta.latestCompletedRoundId}` : ""}…`
+            : ""}
+          {" · "}
+          {refreshHint}
         </p>
       </header>
 
