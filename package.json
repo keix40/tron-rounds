@@ -1,0 +1,58 @@
+{
+  "name": "tron-rounds",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --turbopack",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx scripts/migrate.ts",
+    "backfill": "tsx scripts/backfill.ts"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.45.2",
+    "exceljs": "^4.4.0",
+    "next": "15.5.27",
+    "postgres": "^3.4.5",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@eslint/eslintrc": "^3.3.1",
+    "@next/eslint-plugin-next": "15.5.27",
+    "@tailwindcss/postcss": "^4.0.14",
+    "@types/node": "^22.13.10",
+    "@types/react": "^19.0.10",
+    "@types/react-dom": "^19.0.4",
+    "drizzle-kit": "^0.30.5",
+    "eslint": "^9.22.0",
+    "eslint-config-next": "15.5.27",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "tailwindcss": "^4.0.14",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2",
+    "vitest": "^3.0.9"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "sharp"
+    ],
+    "overrides": {
+      "postcss": ">=8.5.23",
+      "sharp": ">=0.35.5",
+      "uuid": ">=9.0.0"
+    }
+  },
+  "packageManager": "pnpm@10.33.3",
+  "engines": {
+    "node": ">=20"
+  }
+}
