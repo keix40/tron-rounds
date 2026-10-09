@@ -9,7 +9,7 @@ import { formatMmt, formatUtc } from "@/lib/time";
 
 export const dynamic = "force-dynamic";
 
-const STALE_SYNC_MAX = 30;
+const STALE_SYNC_MAX = 5;
 
 export async function GET(request: NextRequest) {
   try {
@@ -17,7 +17,8 @@ export async function GET(request: NextRequest) {
     const status = await getSyncStatus();
     if (status.isStale) {
       try {
-        await syncRounds({ maxRounds: STALE_SYNC_MAX });
+        // Newest-first; small budget so tip lands quickly. Lock miss returns immediately.
+        await syncRounds({ maxRounds: STALE_SYNC_MAX, timeBudgetMs: 4500 });
       } catch (err) {
         // A failed on-demand sync must not break reads.
         console.error("on-demand sync failed", err);
