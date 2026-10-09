@@ -29,13 +29,13 @@ Live archive and statistics for TRON mainnet **rounds** — the block whose time
 
 ### Freshness (no paid cron)
 
-`syncRounds()` is **idempotent**: it fills missing rounds from the latest **syncable** :54 anchor backward (newest first), so the live tip stays fresh even when older history is still backfilling. Sync waits **~3.5s** after `:54` for the block to exist on TronGrid. Older gaps are filled by backfill or later syncs.
+`syncRounds()` is **idempotent**: it fills missing rounds from the latest **syncable** :54 anchor backward (newest first), so the live tip stays fresh even when older history is still backfilling. Sync waits **~2.5s** after `:54` for the block to exist on TronGrid. Older gaps are filled by backfill or later syncs.
 
-The UI polls about every **1.5s** from **:54–:08** UTC (and while the tip is catching up), then every **~20s** the rest of the minute.
+The UI polls about every **1s** from **:54–:08** UTC (and while the tip is catching up), then every **~20s** the rest of the minute.
 
 | Trigger | Behavior |
 |---------|----------|
-| `GET /api/rounds` | If tip is missing, runs newest-first sync (max **5** rounds, ~4.5s budget; advisory lock miss returns existing rows immediately) |
+| `GET /api/rounds` | If tip is missing, runs newest-first sync (max **1** tip round, ~3.5s budget; advisory lock miss returns existing rows immediately) |
 | `POST /api/sync` | Bearer `SYNC_SECRET`; up to **120** rounds per call (GitHub Actions every **5** min) |
 | `pnpm backfill --days N` | Initial import (~14 days ≈ 20k rounds) |
 

@@ -9,16 +9,17 @@ import { formatMmt, formatUtc } from "@/lib/time";
 
 export const dynamic = "force-dynamic";
 
-const STALE_SYNC_MAX = 5;
+const STALE_SYNC_MAX = 1;
 
 export async function GET(request: NextRequest) {
   try {
     const q = parseRoundsQuery(request.nextUrl.searchParams);
-    const status = await getSyncStatus();
+    let status = await getSyncStatus();
     if (status.isStale) {
       try {
-        // Newest-first; small budget so tip lands quickly. Lock miss returns immediately.
-        await syncRounds({ maxRounds: STALE_SYNC_MAX, timeBudgetMs: 4500 });
+        // Tip-only, newest-first. Lock miss returns immediately with existing rows.
+        await syncRounds({ maxRounds: STALE_SYNC_MAX, timeBudgetMs: 3500 });
+        status = await getSyncStatus();
       } catch (err) {
         // A failed on-demand sync must not break reads.
         console.error("on-demand sync failed", err);
@@ -30,11 +31,11 @@ export async function GET(request: NextRequest) {
     const orderBy = buildOrderBy(q);
     const offset = (q.page - 1) * q.pageSize;
 
-    const [rows, totalRows, refreshed] = await Promise.all([
+    const [rows, totalRows] = await Promise.all([
       db.select().from(rounds).where(where).orderBy(orderBy).limit(q.pageSize).offset(offset),
       db.select({ c: count() }).from(rounds).where(where),
-      getSyncStatus(),
     ]);
+    const refreshed = status;
 
     const total = Number(totalRows[0]?.c ?? 0);
 
