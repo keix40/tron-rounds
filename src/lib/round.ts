@@ -47,8 +47,8 @@ export function latestCompletedRoundAnchor(now: Date = new Date()): Date {
   return anchor;
 }
 
-/** Milliseconds to wait after :54 before treating a round as fetchable (~1 block / ~2.5s). */
-export const SYNC_FINALITY_LAG_MS = 2500;
+/** Milliseconds to wait after :54 before treating a round as fetchable (block ~3s). */
+export const SYNC_FINALITY_LAG_MS = 500;
 
 /** Latest round anchor safe to sync (allows block propagation after :54). */
 export function syncableRoundAnchor(

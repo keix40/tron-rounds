@@ -207,6 +207,11 @@ export default function RoundsApp() {
             inFlight = false;
           }
         }
+        // If still catching up, retry ASAP instead of waiting another full delay.
+        if (!cancelled && metaRef.current?.isStale) {
+          timer = setTimeout(() => void tick(), 200);
+          return;
+        }
         void tick();
       }, wait);
     }
