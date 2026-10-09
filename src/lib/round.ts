@@ -104,6 +104,31 @@ export function enumerateRoundKeys(
   return out;
 }
 
+export type RoundKey = { utcDate: string; roundNumber: number };
+
+export function roundKeyLabel(key: RoundKey): string {
+  return `${key.utcDate}:${key.roundNumber}`;
+}
+
+/**
+ * Missing round keys from the syncable tip backward (newest first), stopping at the
+ * newest contiguous stored round or after maxRounds.
+ */
+export function collectMissingRoundKeysNewestFirst(
+  end: RoundKey,
+  hasRound: (key: RoundKey) => boolean,
+  maxRounds: number,
+): RoundKey[] {
+  const out: RoundKey[] = [];
+  let cur: RoundKey = { ...end };
+  for (let i = 0; i < maxRounds; i++) {
+    if (hasRound(cur)) break;
+    out.push({ ...cur });
+    cur = previousRoundKey(cur.utcDate, cur.roundNumber);
+  }
+  return out;
+}
+
 export function anchorDateForRound(utcDate: string, roundNumber: number): Date {
   const minuteOfDay = roundNumber - 1;
   const h = Math.floor(minuteOfDay / 60);

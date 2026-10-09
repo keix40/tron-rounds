@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { desc } from "drizzle-orm";
 import { getDb, closeDb } from "@/db/client";
 import { rounds } from "@/db/schema";
-import { syncableRoundAnchor, SYNC_FINALITY_LAG_MS } from "@/lib/round";
+import { anchorDateForRound, syncableRoundAnchor, SYNC_FINALITY_LAG_MS } from "@/lib/round";
 import { syncRounds } from "@/lib/sync";
 import * as tronRpc from "@/lib/tron-rpc";
 import { TronRpcClient } from "@/lib/tron-rpc";
@@ -57,6 +58,23 @@ describe.skipIf(!hasDb)("syncRounds integration", () => {
     const db = getDb();
     await db.delete(rounds);
 
+    const endAnchor = syncableRoundAnchor();
+    const endRound =
+      endAnchor.getUTCHours() * 60 + endAnchor.getUTCMinutes() + 1;
+    const utcDate = endAnchor.toISOString().slice(0, 10);
+    await db.insert(rounds).values({
+      utcDate,
+      roundNumber: endRound - 80,
+      roundId: `202**${String(endRound - 80).padStart(4, "0")}`,
+      blockNumber: 87_000_000,
+      blockHash: `0x${"d".repeat(63)}2`,
+      hashTail: "0002",
+      resultDigit: 2,
+      side: "S",
+      parity: "Even",
+      blockTimeUtc: new Date(endAnchor.getTime() - 80 * 60_000),
+    });
+
     const rpc = installDelayedBlockLookup(400);
     const started = Date.now();
     const result = await syncRounds({
@@ -69,8 +87,50 @@ describe.skipIf(!hasDb)("syncRounds integration", () => {
     expect(elapsed).toBeLessThan(4000);
     expect(result.inserted).toBeGreaterThan(0);
     expect(result.inserted).toBeLessThan(10);
-    expect(result.stale).toBe(true);
+    expect(result.inserted).toBeLessThan(80);
   }, 15000);
+
+  it("prioritizes newest missing rounds when older history exists", async () => {
+    const db = getDb();
+    await db.delete(rounds);
+
+    const endAnchor = syncableRoundAnchor();
+    const endMeta = {
+      utcDate: endAnchor.toISOString().slice(0, 10),
+      roundNumber: endAnchor.getUTCHours() * 60 + endAnchor.getUTCMinutes() + 1,
+    };
+    const staleAnchor = anchorDateForRound(endMeta.utcDate, endMeta.roundNumber - 50);
+    await db.insert(rounds).values({
+      utcDate: endMeta.utcDate,
+      roundNumber: endMeta.roundNumber - 50,
+      roundId: `202**${String(endMeta.roundNumber - 50).padStart(4, "0")}`,
+      blockNumber: 88_000_000,
+      blockHash: `0x${"c".repeat(63)}4`,
+      hashTail: "0004",
+      resultDigit: 4,
+      side: "S",
+      parity: "Even",
+      blockTimeUtc: staleAnchor,
+    });
+
+    const rpc = installDelayedBlockLookup(50);
+    const result = await syncRounds({ rpc, maxRounds: 5, timeBudgetMs: 8000 });
+    expect(result.inserted).toBe(5);
+
+    const rows = await db
+      .select({ roundNumber: rounds.roundNumber })
+      .from(rounds)
+      .orderBy(desc(rounds.roundNumber))
+      .limit(5);
+    expect(rows[0]!.roundNumber).toBe(endMeta.roundNumber);
+    expect(rows.map((r) => r.roundNumber)).toEqual([
+      endMeta.roundNumber,
+      endMeta.roundNumber - 1,
+      endMeta.roundNumber - 2,
+      endMeta.roundNumber - 3,
+      endMeta.roundNumber - 4,
+    ]);
+  }, 20000);
 
   it("serializes concurrent syncs with xact advisory lock", async () => {
     const db = getDb();

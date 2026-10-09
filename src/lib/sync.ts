@@ -5,13 +5,13 @@ import { rounds, type NewRound } from "@/db/schema";
 import { deriveRoundOutcome } from "@/lib/digit";
 import {
   anchorDateForRound,
-  enumerateRoundKeys,
-  nextRoundKey,
-  syncableRoundAnchor,
+  collectMissingRoundKeysNewestFirst,
   previousRoundKey,
   roundMetaFromUtcDate,
+  syncableRoundAnchor,
   targetTimestampSecond54,
   formatRoundId,
+  type RoundKey,
 } from "@/lib/round";
 import {
   TronRpcClient,
@@ -57,16 +57,39 @@ function blockToRound(row: {
   };
 }
 
+type DbTx = Parameters<Parameters<ReturnType<typeof getDb>["transaction"]>[0]>[0];
+
+async function roundExists(tx: DbTx, key: RoundKey): Promise<boolean> {
+  const rows = await tx
+    .select({ n: rounds.roundNumber })
+    .from(rounds)
+    .where(and(eq(rounds.utcDate, key.utcDate), eq(rounds.roundNumber, key.roundNumber)))
+    .limit(1);
+  return rows.length > 0;
+}
+
+/** Load which keys in the candidate list are missing (for async DB). */
+export async function planMissingRoundKeysNewestFirst(
+  end: RoundKey,
+  exists: (key: RoundKey) => Promise<boolean>,
+  maxRounds: number,
+): Promise<RoundKey[]> {
+  const out: RoundKey[] = [];
+  let cur: RoundKey = { ...end };
+  for (let i = 0; i < maxRounds; i++) {
+    if (await exists(cur)) break;
+    out.push({ ...cur });
+    cur = previousRoundKey(cur.utcDate, cur.roundNumber);
+  }
+  return out;
+}
+
 export async function syncRounds(options: SyncOptions = {}): Promise<SyncResult> {
   const maxRounds = Math.max(1, Math.min(options.maxRounds ?? 30, 500));
-  // Bound work per request so serverless functions stay well under their time limit.
   const deadline = Date.now() + (options.timeBudgetMs ?? 7000);
   const rpc = options.rpc ?? new TronRpcClient();
   const db = getDb();
 
-  // Transaction-scoped advisory lock: safe behind Neon's transaction-mode pooler and a
-  // multi-connection client (a session lock could be taken and released on different
-  // connections and leak forever). Auto-released on commit/rollback.
   return db.transaction(async (tx) => {
     const lockRows = await tx.execute<{ locked: boolean }>(
       sql`SELECT pg_try_advisory_xact_lock(${SYNC_LOCK_KEY}) AS locked`,
@@ -75,45 +98,34 @@ export async function syncRounds(options: SyncOptions = {}): Promise<SyncResult>
       return { inserted: 0, skipped: 0, lastRoundId: null, stale: true };
     }
 
-    const latestRows = await tx
-      .select()
-      .from(rounds)
-      .orderBy(desc(rounds.blockTimeUtc))
-      .limit(1);
-
     const endAnchor = completedAnchorNow();
     const endMeta = roundMetaFromUtcDate(endAnchor);
+    const endKey: RoundKey = { utcDate: endMeta.utcDate, roundNumber: endMeta.roundNumber };
 
-    let startKey: { utcDate: string; roundNumber: number };
-    let startBlockHint: number;
+    const toSync = await planMissingRoundKeysNewestFirst(endKey, (key) => roundExists(tx, key), maxRounds);
 
-    if (latestRows.length === 0) {
-      const bootstrapAnchor = new Date(endAnchor);
-      bootstrapAnchor.setUTCMinutes(bootstrapAnchor.getUTCMinutes() - (maxRounds - 1));
-      startKey = roundMetaFromUtcDate(bootstrapAnchor);
-      const latestBn = await rpc.getLatestBlockNumber();
-      startBlockHint = latestBn - 20 * maxRounds;
-    } else {
-      const last = latestRows[0]!;
-      startKey = nextRoundKey(last.utcDate, last.roundNumber);
-      startBlockHint = last.blockNumber + 20;
+    if (toSync.length === 0) {
+      const tipRows = await tx
+        .select({ roundId: rounds.roundId })
+        .from(rounds)
+        .where(and(eq(rounds.utcDate, endKey.utcDate), eq(rounds.roundNumber, endKey.roundNumber)))
+        .limit(1);
+      return {
+        inserted: 0,
+        skipped: 0,
+        lastRoundId: tipRows[0]?.roundId ?? null,
+        stale: false,
+      };
     }
 
-    const lastKnown = latestRows[0]
-      ? `${latestRows[0].utcDate}:${latestRows[0].roundNumber}`
-      : null;
-    const endKey = `${endMeta.utcDate}:${endMeta.roundNumber}`;
-    if (lastKnown === endKey) {
-      return { inserted: 0, skipped: 0, lastRoundId: latestRows[0]!.roundId, stale: false };
-    }
+    // Newest-first: start from chain head; each older round uses the prior block hint.
+    let hint = (await rpc.getLatestBlockNumber()) - 20;
 
-    const keys = enumerateRoundKeys(startKey, endMeta).slice(0, maxRounds);
     let inserted = 0;
     let skipped = 0;
-    let hint = startBlockHint;
-    let lastDone: { utcDate: string; roundNumber: number } | null = null;
+    let lastDone: RoundKey | null = null;
 
-    for (const key of keys) {
+    for (const key of toSync) {
       if (Date.now() > deadline) break;
       const anchor = anchorDateForRound(key.utcDate, key.roundNumber);
       const targetTs = targetTimestampSecond54(anchor);
@@ -121,11 +133,10 @@ export async function syncRounds(options: SyncOptions = {}): Promise<SyncResult>
       try {
         found = await findBlockAtOrAfterSecond54(rpc, targetTs, hint);
       } catch {
-        // e.g. hint past chain head or TronGrid hiccup: stop here, the next sync resumes.
         break;
       }
       const { block, blockNumber } = found;
-      hint = blockNumber + 20;
+      hint = blockNumber - 20;
       const ts = blockTimestampSeconds(block);
 
       const row = blockToRound({
@@ -142,14 +153,13 @@ export async function syncRounds(options: SyncOptions = {}): Promise<SyncResult>
       lastDone = key;
     }
 
-    const stillBehind =
-      !lastDone || lastDone.utcDate !== endMeta.utcDate || lastDone.roundNumber !== endMeta.roundNumber;
+    const tipStored = await roundExists(tx, endKey);
 
     return {
       inserted,
       skipped,
       lastRoundId: lastDone ? formatRoundId(lastDone.roundNumber) : null,
-      stale: stillBehind,
+      stale: !tipStored,
     };
   });
 }
@@ -196,13 +206,19 @@ export async function getSyncStatus(): Promise<{
   const endAnchor = completedAnchorNow();
   const latestCompleted = roundMetaFromUtcDate(endAnchor);
   const last = latestRows[0] ?? null;
-  let isStale = true;
-  if (last) {
-    isStale =
-      last.utcDate !== latestCompleted.utcDate ||
-      last.roundNumber !== latestCompleted.roundNumber;
-  }
-  return { lastRound: last, latestCompleted, isStale };
+
+  const tipRows = await db
+    .select({ roundNumber: rounds.roundNumber })
+    .from(rounds)
+    .where(
+      and(
+        eq(rounds.utcDate, latestCompleted.utcDate),
+        eq(rounds.roundNumber, latestCompleted.roundNumber),
+      ),
+    )
+    .limit(1);
+
+  return { lastRound: last, latestCompleted, isStale: tipRows.length === 0 };
 }
 
-export { previousRoundKey };
+export { previousRoundKey, collectMissingRoundKeysNewestFirst };

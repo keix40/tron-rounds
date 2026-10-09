@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   anchorDateForRound,
+  collectMissingRoundKeysNewestFirst,
   formatRoundId,
   latestCompletedRoundAnchor,
   roundMetaFromUtcDate,
@@ -62,5 +63,26 @@ describe("latestCompletedRoundAnchor", () => {
 describe("utcDateString", () => {
   it("uses UTC calendar date", () => {
     expect(utcDateString(new Date("2026-10-05T23:00:00.000Z"))).toBe("2026-10-05");
+  });
+});
+
+describe("collectMissingRoundKeysNewestFirst", () => {
+  const end = { utcDate: "2026-10-05", roundNumber: 200 };
+
+  it("returns empty when tip is stored", () => {
+    const stored = new Set(["2026-10-05:200"]);
+    const keys = collectMissingRoundKeysNewestFirst(end, (k) => stored.has(`${k.utcDate}:${k.roundNumber}`), 10);
+    expect(keys).toEqual([]);
+  });
+
+  it("lists newest-first gap down to contiguous stored round", () => {
+    const stored = new Set(["2026-10-05:195"]);
+    const keys = collectMissingRoundKeysNewestFirst(end, (k) => stored.has(`${k.utcDate}:${k.roundNumber}`), 10);
+    expect(keys.map((k) => k.roundNumber)).toEqual([200, 199, 198, 197, 196]);
+  });
+
+  it("respects maxRounds from the tip", () => {
+    const keys = collectMissingRoundKeysNewestFirst(end, () => false, 3);
+    expect(keys.map((k) => k.roundNumber)).toEqual([200, 199, 198]);
   });
 });

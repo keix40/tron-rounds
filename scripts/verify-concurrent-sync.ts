@@ -1,5 +1,6 @@
 /**
  * Manual verification: transaction advisory lock + time budget against real Postgres.
+ * Optional wipe requires --i-know-this-wipes-local-db and a localhost DATABASE_URL.
  */
 import { sql } from "drizzle-orm";
 import { closeDb, getDb } from "@/db/client";
@@ -8,14 +9,39 @@ import { rounds } from "@/db/schema";
 import { syncRounds } from "@/lib/sync";
 import { TronRpcClient } from "@/lib/tron-rpc";
 
+const WIPE_FLAG = "--i-know-this-wipes-local-db";
+
+function isLocalDatabaseUrl(url: string): boolean {
+  try {
+    const normalized = url.replace(/^postgresql:/, "http:").replace(/^postgres:/, "http:");
+    const host = new URL(normalized).hostname;
+    return host === "localhost" || host === "127.0.0.1";
+  } catch {
+    return false;
+  }
+}
+
 async function main() {
+  const url = process.env.DATABASE_URL;
+  if (!url) {
+    throw new Error("DATABASE_URL is required");
+  }
+
   const db = getDb();
   const locks = await db.execute<{ count: string }>(
     sql`SELECT count(*)::text AS count FROM pg_locks WHERE locktype = 'advisory'`,
   );
   console.log("advisory locks before", firstRow<{ count: string }>(locks)?.count);
 
-  await db.delete(rounds);
+  if (process.argv.includes(WIPE_FLAG)) {
+    if (!isLocalDatabaseUrl(url)) {
+      throw new Error(
+        `${WIPE_FLAG} refused: DATABASE_URL host must be localhost or 127.0.0.1`,
+      );
+    }
+    await db.delete(rounds);
+    console.log("wiped rounds table (local dev only)");
+  }
 
   const rpc = new TronRpcClient({ minIntervalMs: 80 });
   const t0 = Date.now();
