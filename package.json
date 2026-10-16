@@ -33,7 +33,7 @@
     "@types/react": "^19.0.10",
     "@types/react-dom": "^19.0.4",
     "@types/ws": "^8.18.2",
-    "drizzle-kit": "^0.30.5",
+    "drizzle-kit": "^0.31.11",
     "eslint": "^9.22.0",
     "eslint-config-next": "15.5.27",
     "eslint-plugin-react": "^7.37.5",
