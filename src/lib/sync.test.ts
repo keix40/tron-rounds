@@ -7,7 +7,9 @@ import { syncRounds } from "@/lib/sync";
 import * as tronRpc from "@/lib/tron-rpc";
 import { TronRpcClient } from "@/lib/tron-rpc";
 
-const hasDb = Boolean(process.env.DATABASE_URL);
+// These tests wipe the rounds table. Only run them against a throwaway database,
+// never production: set ALLOW_DESTRUCTIVE_DB_TESTS=1 explicitly to opt in.
+const hasDb = Boolean(process.env.DATABASE_URL) && process.env.ALLOW_DESTRUCTIVE_DB_TESTS === "1";
 
 describe("syncableRoundAnchor (:54 grace)", () => {
   it("keeps previous minute until ~0.5s after :54", () => {

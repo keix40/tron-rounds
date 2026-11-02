@@ -84,6 +84,40 @@ export async function planMissingRoundKeysNewestFirst(
   return out;
 }
 
+export const GAP_LOOKBACK_HOURS = 48;
+
+/** Missing round keys in the lookback window ending at `end`, newest first. */
+async function findMissingRoundKeysNewestFirst(
+  tx: DbTx,
+  end: Date,
+  limit: number,
+): Promise<RoundKey[]> {
+  const endIso = end.toISOString();
+  const res = await tx.execute<{ utc_date: string; round_number: number }>(sql`
+    SELECT to_char(gs AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS utc_date,
+           (extract(hour FROM gs AT TIME ZONE 'UTC') * 60
+             + extract(minute FROM gs AT TIME ZONE 'UTC') + 1)::int AS round_number
+    FROM generate_series(
+      ${endIso}::timestamptz - make_interval(hours => ${GAP_LOOKBACK_HOURS}),
+      ${endIso}::timestamptz,
+      interval '1 minute'
+    ) AS gs
+    WHERE NOT EXISTS (
+      SELECT 1 FROM rounds r
+      WHERE r.utc_date = to_char(gs AT TIME ZONE 'UTC', 'YYYY-MM-DD')
+        AND r.round_number = (extract(hour FROM gs AT TIME ZONE 'UTC') * 60
+             + extract(minute FROM gs AT TIME ZONE 'UTC') + 1)::int
+    )
+    ORDER BY gs DESC
+    LIMIT ${limit}
+  `);
+  const rows = (Array.isArray(res) ? res : (res as { rows: unknown[] }).rows) as Array<{
+    utc_date: string;
+    round_number: number;
+  }>;
+  return rows.map((r) => ({ utcDate: r.utc_date, roundNumber: Number(r.round_number) }));
+}
+
 export async function syncRounds(options: SyncOptions = {}): Promise<SyncResult> {
   const maxRounds = Math.max(1, Math.min(options.maxRounds ?? 30, 500));
   const deadline = Date.now() + (options.timeBudgetMs ?? 7000);
@@ -102,7 +136,19 @@ export async function syncRounds(options: SyncOptions = {}): Promise<SyncResult>
     const endMeta = roundMetaFromUtcDate(endAnchor);
     const endKey: RoundKey = { utcDate: endMeta.utcDate, roundNumber: endMeta.roundNumber };
 
-    const toSync = await planMissingRoundKeysNewestFirst(endKey, (key) => roundExists(tx, key), maxRounds);
+    // Tip-first walk, then any older holes in the lookback window. A plain
+    // tip walk stops at the first stored round, so gaps left by slow or
+    // skipped cron runs were never filled.
+    const tipRun = await planMissingRoundKeysNewestFirst(endKey, (key) => roundExists(tx, key), maxRounds);
+    const toSync = [...tipRun];
+    if (toSync.length < maxRounds) {
+      const seen = new Set(toSync.map((k) => `${k.utcDate}:${k.roundNumber}`));
+      const holes = await findMissingRoundKeysNewestFirst(tx, endAnchor, maxRounds);
+      for (const k of holes) {
+        if (toSync.length >= maxRounds) break;
+        if (!seen.has(`${k.utcDate}:${k.roundNumber}`)) toSync.push(k);
+      }
+    }
 
     if (toSync.length === 0) {
       const tipRows = await tx
