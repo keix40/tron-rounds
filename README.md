@@ -4,7 +4,7 @@ Live archive and statistics for TRON mainnet **rounds** — the block whose time
 
 **Archive and stats only.** There is no prediction, betting, pattern analysis, or “next result” functionality. Outcomes come from unpredictable block hashes.
 
-**Live site:** _(add Vercel deployment URL after deploy)_
+**Live site:** https://tron-rounds.vercel.app
 
 ## Rules
 
@@ -36,8 +36,23 @@ The UI polls about every **1s** from **:54–:08** UTC (and while the tip is cat
 | Trigger | Behavior |
 |---------|----------|
 | `GET /api/rounds` | If tip is missing, runs newest-first sync (max **1** tip round, ~3.5s budget; advisory lock miss returns existing rows immediately) |
-| `POST /api/sync` | Bearer `SYNC_SECRET`; up to **120** rounds per call (GitHub Actions every **5** min) |
+| `POST /api/sync` | Bearer `SYNC_SECRET`; up to **120** rounds per call. **Primary:** external cron every **1** min (see below). **Backup:** GitHub Actions schedule (often delayed). |
 | `pnpm backfill --days N` | Initial import (~14 days ≈ 20k rounds) |
+
+### External cron (recommended — every 1 minute)
+
+GitHub Actions cron is unreliable at short intervals. Use [cron-job.org](https://cron-job.org) (or similar) as the primary trigger:
+
+1. Create a free account at cron-job.org.
+2. New cron job:
+   - **URL:** `https://tron-rounds.vercel.app/api/sync`
+   - **Schedule:** every **1 minute**
+   - **Request method:** `POST`
+   - **Header:** `Authorization` = `Bearer <SYNC_SECRET>` (copy the value from Vercel → tron-rounds → Settings → Environment Variables → `SYNC_SECRET`; never paste it into git)
+   - **Header:** `Content-Type` = `application/json`
+3. Enable the job and confirm the execution history returns HTTP 200.
+
+The GitHub Actions workflow `.github/workflows/sync.yml` remains as a backup only.
 
 ## Environment variables
 
@@ -47,7 +62,7 @@ The UI polls about every **1s** from **:54–:08** UTC (and while the tip is cat
 | `DATABASE_DRIVER` | No | Set to `neon` (or `serverless`) to use `@neondatabase/serverless` WebSocket driver (port 443) instead of `postgres` TCP |
 | `USE_NEON_SERVERLESS` | No | Set to `1` — same as `DATABASE_DRIVER=neon` |
 | `SYNC_SECRET` | Yes (prod) | Bearer token for `POST /api/sync` |
-| `TRONGRID_API_KEY` | No | Optional TronGrid Pro API key header |
+| `TRONGRID_API_KEY` | Recommended | TronGrid Pro API key (`TRON-PRO-API-KEY` header); avoids silent rate limiting |
 | `TRONGRID_RPC_URL` | No | Override JSON-RPC URL (default: public TronGrid) |
 
 ### GitHub Actions secrets (sync workflow)
