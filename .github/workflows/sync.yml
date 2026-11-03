@@ -1,8 +1,10 @@
 name: sync-rounds
 
+# Backup only — GitHub schedule is often delayed and may not run every minute.
+# Primary: external cron (cron-job.org) POSTing /api/sync every 1 minute. See README.
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "*/1 * * * *"
   workflow_dispatch:
 
 jobs:
